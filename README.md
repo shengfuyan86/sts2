@@ -66,4 +66,4 @@ Writes are disabled by default. Enable them explicitly before live action testin
 ## Encoding Note
 
 - Chinese docs and OpenSpec artifacts use UTF-8 without BOM.
-- Avoid writing Chinese files through PowerShell text pipes; that may produce `???`.
+- Avoid writing Chinese files through PowerShell text pipes; that may produce `???`.:

@@ -95,11 +95,30 @@ class RelicView:
 
 
 @dataclass(slots=True)
+class MapNodeInfo:
+    coord: str = ""
+    node_type: str = ""
+    col: int = -1
+    row: int = -1
+    visited: bool = False
+    is_current: bool = False
+
+
+@dataclass(slots=True)
+class MapEdge:
+    from_coord: str = ""
+    to_coord: str = ""
+
+
+@dataclass(slots=True)
 class RunMapState:
     current_coord: str | None = None
     current_node_type: str | None = None
     reachable_nodes: list[str] = field(default_factory=list)
     source: str | None = None
+    all_nodes: list[MapNodeInfo] = field(default_factory=list)
+    all_edges: list[MapEdge] = field(default_factory=list)
+    visited_path: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)

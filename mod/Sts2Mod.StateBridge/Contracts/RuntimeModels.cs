@@ -20,11 +20,26 @@ public sealed record RuntimeRelicState(
     string? CanonicalRelicId = null,
     IReadOnlyList<GlossaryAnchor>? Glossary = null);
 
+public sealed record RuntimeMapNodeInfo(
+    string Coord,
+    string NodeType,
+    int Col,
+    int Row,
+    bool Visited = false,
+    bool IsCurrent = false);
+
+public sealed record RuntimeMapEdge(
+    string From,
+    string To);
+
 public sealed record RuntimeRunMapState(
     string? CurrentCoord = null,
     string? CurrentNodeType = null,
     IReadOnlyList<string>? ReachableNodes = null,
-    string? Source = null);
+    string? Source = null,
+    IReadOnlyList<RuntimeMapNodeInfo>? AllNodes = null,
+    IReadOnlyList<RuntimeMapEdge>? AllEdges = null,
+    IReadOnlyList<string>? VisitedPath = null);
 
 public sealed record RuntimeRunState(
     int? Act = null,

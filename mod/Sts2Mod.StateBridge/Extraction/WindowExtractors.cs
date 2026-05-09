@@ -354,7 +354,10 @@ public abstract class WindowExtractorBase : IWindowExtractor
                 runState.Map.CurrentCoord,
                 runState.Map.CurrentNodeType,
                 runState.Map.ReachableNodes?.ToArray() ?? Array.Empty<string>(),
-                runState.Map.Source));
+                runState.Map.Source,
+                runState.Map.AllNodes?.Select(n => new MapNodeInfo(n.Coord, n.NodeType, n.Col, n.Row, n.Visited, n.IsCurrent)).ToArray() ?? Array.Empty<MapNodeInfo>(),
+                runState.Map.AllEdges?.Select(e => new MapEdge(e.From, e.To)).ToArray() ?? Array.Empty<MapEdge>(),
+                runState.Map.VisitedPath?.ToArray() ?? Array.Empty<string>()));
     }
 }
 

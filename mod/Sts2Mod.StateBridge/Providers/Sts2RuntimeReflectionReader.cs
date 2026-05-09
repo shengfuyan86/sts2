@@ -2071,6 +2071,9 @@ internal sealed class Sts2RuntimeReflectionReader
         var currentMapPoint = GetMemberValue(runState, "CurrentMapPoint");
         var mapNodes = reachableNodes ?? ExtractMapNodes(runState, textDiagnostics, out mapNodeSource);
         mapNodeSource ??= "unavailable";
+
+        var (allNodes, allEdges, visitedPath) = ExtractFullMap(runState, textDiagnostics);
+
         return new RuntimeRunState(
             Act: act,
             Floor: GetNullableInt(runState, "ActFloor"),
@@ -2084,7 +2087,10 @@ internal sealed class Sts2RuntimeReflectionReader
                     ? null
                     : ConvertToText(GetMemberValue(currentMapPoint, "PointType"), "run_state.map.current_node_type", textDiagnostics),
                 ReachableNodes: mapNodes,
-                Source: mapNodeSource));
+                Source: mapNodeSource,
+                AllNodes: allNodes,
+                AllEdges: allEdges,
+                VisitedPath: visitedPath));
     }
 
     private object? GetOverlayTopScreen(object runNode)
@@ -2670,6 +2676,92 @@ internal sealed class Sts2RuntimeReflectionReader
             .ToList();
         source = nodes.Count > 0 ? "starting_map_point_fallback" : "no_reachable_nodes";
         return nodes;
+    }
+
+    private (List<RuntimeMapNodeInfo> Nodes, List<RuntimeMapEdge> Edges, List<string> VisitedPath) ExtractFullMap(
+        object runState, TextDiagnosticsCollector textDiagnostics)
+    {
+        var nodes = new List<RuntimeMapNodeInfo>();
+        var edges = new List<RuntimeMapEdge>();
+        var seenCoords = new HashSet<string>(StringComparer.Ordinal);
+        var seenEdges = new HashSet<string>(StringComparer.Ordinal);
+        var currentCoordStr = (string?)null;
+
+        var currentMapPoint = GetMemberValue(runState, "CurrentMapPoint");
+        if (currentMapPoint is not null)
+        {
+            currentCoordStr = DescribeMapCoord(GetMemberValue(currentMapPoint, "coord"));
+        }
+
+        var map = GetMemberValue(runState, "Map");
+        var startingPoint = GetMemberValue(map, "StartingMapPoint");
+        var rootPoint = startingPoint;
+
+        if (rootPoint is null)
+        {
+            return (nodes, edges, new List<string>());
+        }
+
+        WalkMapTree(rootPoint, null, textDiagnostics, nodes, edges, seenCoords, seenEdges, currentCoordStr, 0);
+
+        var visitedPath = string.IsNullOrEmpty(currentCoordStr)
+            ? new List<string>()
+            : new List<string> { currentCoordStr };
+
+        return (nodes, edges, visitedPath);
+    }
+
+    private void WalkMapTree(
+        object? mapPoint,
+        string? parentCoord,
+        TextDiagnosticsCollector textDiagnostics,
+        List<RuntimeMapNodeInfo> nodes,
+        List<RuntimeMapEdge> edges,
+        HashSet<string> seenCoords,
+        HashSet<string> seenEdges,
+        string? currentCoordStr,
+        int depth)
+    {
+        if (mapPoint is null || depth > 50)
+        {
+            return;
+        }
+
+        var coordObj = GetMemberValue(mapPoint, "coord");
+        var coord = DescribeMapCoord(coordObj);
+        if (string.IsNullOrWhiteSpace(coord) || coord == "-1,-1")
+        {
+            return;
+        }
+
+        // Add edge if not duplicate
+        if (parentCoord is not null)
+        {
+            var edgeKey = $"{parentCoord}->{coord}";
+            if (seenEdges.Add(edgeKey))
+            {
+                edges.Add(new RuntimeMapEdge(parentCoord, coord));
+            }
+        }
+
+        // Skip if this node was already added via another path
+        if (!seenCoords.Add(coord))
+        {
+            return;
+        }
+
+        var pointType = ConvertToText(GetMemberValue(mapPoint, "PointType"), "map_node.point_type", textDiagnostics) ?? "unknown";
+        var col = GetNullableInt(coordObj, "col") ?? -1;
+        var row = GetNullableInt(coordObj, "row") ?? -1;
+        var isCurrent = string.Equals(coord, currentCoordStr, StringComparison.Ordinal);
+
+        nodes.Add(new RuntimeMapNodeInfo(coord, pointType, col, row, isCurrent, isCurrent));
+
+        var children = EnumerateObjects(GetMemberValue(mapPoint, "Children"));
+        foreach (var child in children)
+        {
+            WalkMapTree(child, coord, textDiagnostics, nodes, edges, seenCoords, seenEdges, currentCoordStr, depth + 1);
+        }
     }
 
     private bool TryGetRuntimeRoot(Assembly assembly, out RuntimeRoot root, out string status)

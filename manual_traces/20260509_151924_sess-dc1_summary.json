@@ -1,0 +1,15 @@
+{
+  "run_id": "20260509_151924_sess-dc1",
+  "session_id": "sess-dc1f5091",
+  "started_at": "2026-05-09T07:19:24.504318+00:00",
+  "ended_at": "2026-05-09T07:20:06.240778+00:00",
+  "total_steps": 15,
+  "sl_events": [],
+  "phases_visited": [
+    "terminal",
+    "combat",
+    "menu",
+    "event",
+    "map"
+  ]
+}

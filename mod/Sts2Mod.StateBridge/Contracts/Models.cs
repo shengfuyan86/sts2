@@ -53,11 +53,26 @@ public sealed record RelicView(
     string? CanonicalRelicId = null,
     IReadOnlyList<GlossaryAnchor>? Glossary = null);
 
+public sealed record MapNodeInfo(
+    string Coord,
+    string NodeType,
+    int Col,
+    int Row,
+    bool Visited = false,
+    bool IsCurrent = false);
+
+public sealed record MapEdge(
+    string From,
+    string To);
+
 public sealed record RunMapState(
     string? CurrentCoord = null,
     string? CurrentNodeType = null,
     IReadOnlyList<string>? ReachableNodes = null,
-    string? Source = null);
+    string? Source = null,
+    IReadOnlyList<MapNodeInfo>? AllNodes = null,
+    IReadOnlyList<MapEdge>? AllEdges = null,
+    IReadOnlyList<string>? VisitedPath = null);
 
 public sealed record RunState(
     int? Act = null,

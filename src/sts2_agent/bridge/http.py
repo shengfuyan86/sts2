@@ -24,6 +24,8 @@ from sts2_agent.models import (
     EnemyState,
     GlossaryAnchor,
     LegalAction,
+    MapEdge,
+    MapNodeInfo,
     PlayerState,
     PotionView,
     PowerView,
@@ -390,11 +392,34 @@ class HttpGameBridge(GameBridge):
         map_payload = payload.get("map")
         map_state = None
         if isinstance(map_payload, dict):
+            all_nodes = [
+                MapNodeInfo(
+                    coord=str(n.get("coord", "")),
+                    node_type=str(n.get("node_type", "")),
+                    col=int(n.get("col", -1)),
+                    row=int(n.get("row", -1)),
+                    visited=bool(n.get("visited", False)),
+                    is_current=bool(n.get("is_current", False)),
+                )
+                for n in (map_payload.get("all_nodes") or [])
+                if isinstance(n, dict)
+            ]
+            all_edges = [
+                MapEdge(
+                    from_coord=str(e.get("from", "")),
+                    to_coord=str(e.get("to", "")),
+                )
+                for e in (map_payload.get("all_edges") or [])
+                if isinstance(e, dict)
+            ]
             map_state = RunMapState(
                 current_coord=map_payload.get("current_coord"),
                 current_node_type=map_payload.get("current_node_type"),
                 reachable_nodes=list(map_payload.get("reachable_nodes") or []),
                 source=map_payload.get("source"),
+                all_nodes=all_nodes,
+                all_edges=all_edges,
+                visited_path=list(map_payload.get("visited_path") or []),
             )
         return RunState(
             act=HttpGameBridge._as_optional_int(payload.get("act")),
