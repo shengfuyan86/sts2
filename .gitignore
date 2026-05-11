@@ -9,3 +9,4 @@ build/
 dist/
 traces/
 tmp/
+manual_traces/

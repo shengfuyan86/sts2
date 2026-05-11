@@ -95,6 +95,43 @@ def make_actions(count: int = 3) -> list[dict]:
     ]
 
 
+def read_entries(output_dir: Path) -> list[dict]:
+    """Read full entries from the JSONL file in output_dir."""
+    files = [f for f in output_dir.glob("*.jsonl") if "slim" not in f.name]
+    if not files:
+        return []
+    entries = []
+    with files[0].open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                entries.append(json.loads(line))
+    return entries
+
+
+def read_slim_entries(output_dir: Path) -> list[dict]:
+    """Read slim entries from the slim JSONL file in output_dir."""
+    files = list(output_dir.glob("*.slim.jsonl"))
+    if not files:
+        return []
+    entries = []
+    with files[0].open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                entries.append(json.loads(line))
+    return entries
+    return [
+        {
+            "action_id": f"act-{i}",
+            "type": "play_card",
+            "label": f"Play card {i}",
+            "params": {"card_index": i},
+        }
+        for i in range(count)
+    ]
+
+
 class SnapshotFingerprintTests(unittest.TestCase):
     def test_same_snapshot_produces_same_fingerprint(self) -> None:
         s = make_snapshot()
@@ -141,6 +178,9 @@ class BasicRecordingTests(unittest.TestCase):
             poll_interval=0.01,
         )
         self.recorder = ManualPlayRecorder(self.config)
+        patcher = patch.object(self.recorder, "_fetch_action_log", return_value=[])
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self) -> None:
         import shutil
@@ -158,9 +198,10 @@ class BasicRecordingTests(unittest.TestCase):
             self.recorder._poll_once()
 
         self.assertIsNotNone(self.recorder._current_run)
-        self.assertEqual(len(self.recorder._current_run.entries), 1)
-        self.assertEqual(self.recorder._current_run.entries[0]["state_version"], 1)
-        self.assertEqual(self.recorder._current_run.entries[0]["phase"], "combat")
+        entries = read_entries(self.recorder.output_dir)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["state_version"], 1)
+        self.assertEqual(entries[0]["phase"], "combat")
 
     def test_ignores_duplicate_state(self) -> None:
         snap = make_snapshot(state_version=1)
@@ -174,7 +215,8 @@ class BasicRecordingTests(unittest.TestCase):
             mock_fetch.side_effect = [snap, actions]
             self.recorder._poll_once()
 
-        self.assertEqual(len(self.recorder._current_run.entries), 1)
+        entries = read_entries(self.recorder.output_dir)
+        self.assertEqual(len(entries), 1)
 
     def test_records_multiple_state_changes(self) -> None:
         snap1 = make_snapshot(state_version=1, phase="combat")
@@ -188,10 +230,11 @@ class BasicRecordingTests(unittest.TestCase):
             self.recorder._poll_once()
             self.recorder._poll_once()
 
-        self.assertEqual(len(self.recorder._current_run.entries), 3)
-        self.assertEqual(self.recorder._current_run.entries[0]["phase"], "combat")
-        self.assertEqual(self.recorder._current_run.entries[1]["phase"], "reward")
-        self.assertEqual(self.recorder._current_run.entries[2]["phase"], "map")
+        entries = read_entries(self.recorder.output_dir)
+        self.assertEqual(len(entries), 3)
+        self.assertEqual(entries[0]["phase"], "combat")
+        self.assertEqual(entries[1]["phase"], "reward")
+        self.assertEqual(entries[2]["phase"], "map")
 
     def test_finalizes_run_on_stop(self) -> None:
         snap = make_snapshot(state_version=1)
@@ -239,56 +282,77 @@ class SLDetectionTests(unittest.TestCase):
             poll_interval=0.01,
         )
         self.recorder = ManualPlayRecorder(self.config)
+        patcher = patch.object(self.recorder, "_fetch_action_log", return_value=[])
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self) -> None:
         import shutil
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_no_sl_on_first_poll(self) -> None:
-        snap = make_snapshot(session_id="sess-001", state_version=1)
-        result = self.recorder._detect_sl("sess-001", 1, snap)
+        result = self.recorder._detect_sl("sess-001", 1, "combat")
         self.assertIsNone(result)
 
     def test_detects_session_change(self) -> None:
         self.recorder._last_session_id = "sess-001"
         self.recorder._last_state_version = 5
+        self.recorder._last_phase = "combat"
 
-        snap = make_snapshot(session_id="sess-002", state_version=1)
-        result = self.recorder._detect_sl("sess-002", 1, snap)
+        result = self.recorder._detect_sl("sess-002", 1, "combat")
 
         self.assertIsNotNone(result)
         self.assertEqual(result["type"], "session_changed")
         self.assertEqual(result["old_session_id"], "sess-001")
         self.assertEqual(result["new_session_id"], "sess-002")
 
-    def test_detects_state_rollback(self) -> None:
+    def test_detects_phase_return_sl(self) -> None:
         self.recorder._last_session_id = "sess-001"
         self.recorder._last_state_version = 10
+        self.recorder._last_phase = "reward"
 
-        snap = make_snapshot(session_id="sess-001", state_version=3)
-        result = self.recorder._detect_sl("sess-001", 3, snap)
+        # reward → menu (records phase_before_menu)
+        self.recorder._detect_sl("sess-001", 11, "menu")
+        self.assertEqual(self.recorder._phase_before_menu, "reward")
 
-        self.assertIsNotNone(result)
-        self.assertEqual(result["type"], "state_rollback")
-        self.assertEqual(result["old_state_version"], 10)
-        self.assertEqual(result["new_state_version"], 3)
-
-    def test_detects_large_version_jump(self) -> None:
-        self.recorder._last_session_id = "sess-001"
-        self.recorder._last_state_version = 5
-
-        snap = make_snapshot(session_id="sess-001", state_version=20)
-        result = self.recorder._detect_sl("sess-001", 20, snap)
+        # menu → reward (SL detected)
+        result = self.recorder._detect_sl("sess-001", 12, "reward")
 
         self.assertIsNotNone(result)
-        self.assertEqual(result["type"], "large_version_jump")
+        self.assertEqual(result["type"], "phase_return")
+        self.assertEqual(result["interrupted_phase"], "reward")
 
-    def test_no_sl_on_normal_increment(self) -> None:
+    def test_detects_phase_return_combat(self) -> None:
+        self.recorder._last_session_id = "sess-001"
+        self.recorder._last_state_version = 20
+        self.recorder._last_phase = "combat"
+
+        # combat → menu → combat
+        self.recorder._detect_sl("sess-001", 21, "menu")
+        result = self.recorder._detect_sl("sess-001", 22, "combat")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["type"], "phase_return")
+        self.assertEqual(result["interrupted_phase"], "combat")
+
+    def test_no_sl_on_normal_phase_change(self) -> None:
         self.recorder._last_session_id = "sess-001"
         self.recorder._last_state_version = 5
+        self.recorder._last_phase = "combat"
 
-        snap = make_snapshot(session_id="sess-001", state_version=6)
-        result = self.recorder._detect_sl("sess-001", 6, snap)
+        # combat → reward (normal transition, no menu in between)
+        result = self.recorder._detect_sl("sess-001", 6, "reward")
+
+        self.assertIsNone(result)
+
+    def test_no_sl_on_different_phase_return(self) -> None:
+        self.recorder._last_session_id = "sess-001"
+        self.recorder._last_state_version = 5
+        self.recorder._last_phase = "combat"
+
+        # combat → menu → reward (different phase, not SL)
+        self.recorder._detect_sl("sess-001", 6, "menu")
+        result = self.recorder._detect_sl("sess-001", 7, "reward")
 
         self.assertIsNone(result)
 
@@ -385,6 +449,9 @@ class RunLifecycleTests(unittest.TestCase):
             poll_interval=0.01,
         )
         self.recorder = ManualPlayRecorder(self.config)
+        patcher = patch.object(self.recorder, "_fetch_action_log", return_value=[])
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self) -> None:
         import shutil
@@ -427,8 +494,8 @@ class RunLifecycleTests(unittest.TestCase):
         self.assertEqual(len(files), 0)
 
     def test_step_index_resets_on_new_run(self) -> None:
-        snap1 = make_snapshot(session_id="sess-001", state_version=1)
-        snap2 = make_snapshot(session_id="sess-001", state_version=2)
+        snap1 = make_snapshot(session_id="sess-001", state_version=1, hp=60)
+        snap2 = make_snapshot(session_id="sess-001", state_version=2, hp=50)
         snap3 = make_snapshot(session_id="sess-002", state_version=1)
         actions = make_actions(2)
 
@@ -564,6 +631,9 @@ class MapTopologyRecordingTests(unittest.TestCase):
             poll_interval=0.01,
         )
         self.recorder = ManualPlayRecorder(self.config)
+        patcher = patch.object(self.recorder, "_fetch_action_log", return_value=[])
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self) -> None:
         import shutil
@@ -628,8 +698,8 @@ class MapTopologyRecordingTests(unittest.TestCase):
             mock_fetch.side_effect = [snap, actions]
             self.recorder._poll_once()
 
-        entry = self.recorder._current_run.entries[0]
-        map_state = entry["snapshot"]["run_state"]["map"]
+        entries = read_entries(self.recorder.output_dir)
+        map_state = entries[0]["snapshot"]["run_state"]["map"]
         self.assertEqual(len(map_state["all_nodes"]), 3)
         self.assertEqual(len(map_state["all_edges"]), 2)
         self.assertEqual(map_state["visited_path"], ["0,0"])
@@ -642,7 +712,8 @@ class MapTopologyRecordingTests(unittest.TestCase):
             mock_fetch.side_effect = [snap, actions]
             self.recorder._poll_once()
 
-        map_state = self.recorder._current_run.entries[0]["snapshot"]["run_state"]["map"]
+        entries = read_entries(self.recorder.output_dir)
+        map_state = entries[0]["snapshot"]["run_state"]["map"]
         current_node = next(n for n in map_state["all_nodes"] if n["is_current"])
         self.assertEqual(current_node["coord"], "0,0")
         self.assertEqual(current_node["node_type"], "monster")
@@ -658,7 +729,8 @@ class MapTopologyRecordingTests(unittest.TestCase):
             mock_fetch.side_effect = [snap, actions]
             self.recorder._poll_once()
 
-        map_state = self.recorder._current_run.entries[0]["snapshot"]["run_state"]["map"]
+        entries = read_entries(self.recorder.output_dir)
+        map_state = entries[0]["snapshot"]["run_state"]["map"]
         edges = map_state["all_edges"]
         self.assertEqual(edges[0]["from"], "0,0")
         self.assertEqual(edges[0]["to"], "1,1")
@@ -771,16 +843,17 @@ class MapTopologyRecordingTests(unittest.TestCase):
             self.recorder._poll_once()
             self.recorder._poll_once()
 
-        self.assertEqual(len(self.recorder._current_run.entries), 2)
+        entries = read_entries(self.recorder.output_dir)
+        self.assertEqual(len(entries), 2)
 
         # First entry: at 0,0
-        map1 = self.recorder._current_run.entries[0]["snapshot"]["run_state"]["map"]
+        map1 = entries[0]["snapshot"]["run_state"]["map"]
         self.assertEqual(map1["current_coord"], "0,0")
         self.assertEqual(len(map1["all_nodes"]), 2)
         self.assertEqual(map1["visited_path"], ["0,0"])
 
         # Second entry: moved to 1,1
-        map2 = self.recorder._current_run.entries[1]["snapshot"]["run_state"]["map"]
+        map2 = entries[1]["snapshot"]["run_state"]["map"]
         self.assertEqual(map2["current_coord"], "1,1")
         self.assertEqual(len(map2["all_nodes"]), 3)
         self.assertEqual(map2["visited_path"], ["0,0", "1,1"])
@@ -926,6 +999,9 @@ class SlimFormatTests(unittest.TestCase):
             poll_interval=0.01,
         )
         self.recorder = ManualPlayRecorder(self.config)
+        patcher = patch.object(self.recorder, "_fetch_action_log", return_value=[])
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self) -> None:
         import shutil
@@ -1017,8 +1093,9 @@ class SlimFormatTests(unittest.TestCase):
             mock_fetch.side_effect = [snap, actions]
             self.recorder._poll_once()
 
-        self.assertEqual(len(self.recorder._current_run.slim_entries), 1)
-        slim = self.recorder._current_run.slim_entries[0]
+        slims = read_slim_entries(self.recorder.output_dir)
+        self.assertEqual(len(slims), 1)
+        slim = slims[0]
         self.assertIn("i", slim)
         self.assertIn("sv", slim)
         self.assertIn("p", slim)
@@ -1029,7 +1106,7 @@ class SlimFormatTests(unittest.TestCase):
         self.assertNotIn("compatibility", slim)
 
     def test_slim_map_dedup(self) -> None:
-        """Map topo should only appear once when unchanged."""
+        """Map topo should only appear once when unchanged; identical game state is deduped."""
         snap1 = self._make_full_snapshot(state_version=1, phase="map")
         snap1["run_state"]["map"] = {
             "current_coord": "0,0",
@@ -1042,7 +1119,7 @@ class SlimFormatTests(unittest.TestCase):
             "all_nodes": [{"coord": "0,0", "node_type": "monster", "col": 0, "row": 0}, {"coord": "1,1", "node_type": "enemy", "col": 1, "row": 1}],
             "all_edges": [{"from": "0,0", "to": "1,1"}],
         }
-        # Same topo as snap1 (same nodes/edges), just coord changed
+        # Same game state as snap2 — should be deduped
         snap3 = self._make_full_snapshot(state_version=3, phase="map")
         snap3["run_state"]["map"] = {
             "current_coord": "1,1",
@@ -1057,13 +1134,12 @@ class SlimFormatTests(unittest.TestCase):
             self.recorder._poll_once()
             self.recorder._poll_once()
 
-        slims = self.recorder._current_run.slim_entries
+        slims = read_slim_entries(self.recorder.output_dir)
+        self.assertEqual(len(slims), 2)
         # Entry 0: first map topo included
         self.assertIn("map", slims[0])
         # Entry 1: different topo, included
         self.assertIn("map", slims[1])
-        # Entry 2: same topo as entry 1, NOT included
-        self.assertNotIn("map", slims[2])
 
     def test_slim_file_written_on_finalize(self) -> None:
         snap = self._make_full_snapshot()
@@ -1090,8 +1166,10 @@ class SlimFormatTests(unittest.TestCase):
             mock_fetch.side_effect = [snap, actions]
             self.recorder._poll_once()
 
-        raw_size = len(json.dumps(self.recorder._current_run.entries[0], ensure_ascii=False))
-        slim_size = len(json.dumps(self.recorder._current_run.slim_entries[0], ensure_ascii=False))
+        entries = read_entries(self.recorder.output_dir)
+        slims = read_slim_entries(self.recorder.output_dir)
+        raw_size = len(json.dumps(entries[0], ensure_ascii=False))
+        slim_size = len(json.dumps(slims[0], ensure_ascii=False))
         self.assertLess(slim_size, raw_size)
 
 

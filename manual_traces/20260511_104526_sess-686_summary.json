@@ -1,0 +1,15 @@
+{
+  "run_id": "20260511_104526_sess-686",
+  "session_id": "sess-68610b1b",
+  "started_at": "2026-05-11T02:45:26.385997+00:00",
+  "ended_at": "2026-05-11T02:47:30.063112+00:00",
+  "total_steps": 44,
+  "sl_events": [],
+  "phases_visited": [
+    "combat",
+    "event",
+    "map",
+    "menu",
+    "reward"
+  ]
+}

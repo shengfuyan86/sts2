@@ -232,3 +232,11 @@ public sealed record AgentStatusResponse(
 public sealed record ErrorResponse(string ErrorCode, string Message, string? TraceId = null);
 
 public sealed record ExportedWindow(DecisionSnapshot Snapshot, IReadOnlyList<LegalAction> Actions);
+
+public sealed record InferredAction(
+    string Type,
+    string? Label = null,
+    IReadOnlyDictionary<string, object?>? Params = null,
+    int StateVersion = 0,
+    string? Phase = null,
+    string? Timestamp = null);

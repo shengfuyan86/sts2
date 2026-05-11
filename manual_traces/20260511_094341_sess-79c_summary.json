@@ -1,0 +1,26 @@
+{
+  "run_id": "20260511_094341_sess-79c",
+  "session_id": "sess-79cd9095",
+  "started_at": "2026-05-11T01:43:41.787208+00:00",
+  "ended_at": "2026-05-11T01:44:33.144018+00:00",
+  "total_steps": 22,
+  "sl_events": [
+    {
+      "type": "phase_return",
+      "interrupted_phase": "combat",
+      "old_state_version": 1565,
+      "new_state_version": 1567,
+      "session_id": "sess-79cd9095",
+      "reason": "Returned to 'combat' phase after menu interruption, likely Save & Load",
+      "step_index": 15,
+      "timestamp": "2026-05-11T01:44:16.207438+00:00"
+    }
+  ],
+  "phases_visited": [
+    "combat",
+    "event",
+    "map",
+    "menu",
+    "terminal"
+  ]
+}

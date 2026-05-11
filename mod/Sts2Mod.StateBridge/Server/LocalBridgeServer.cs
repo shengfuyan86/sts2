@@ -123,6 +123,7 @@ public sealed class LocalBridgeServer : IAsyncDisposable
                 "/snapshot" => _provider.GetSnapshot(phase),
                 "/actions" => _provider.GetActions(phase),
                 "/agent-status" => AgentStatusStateStore.GetCurrent(),
+                "/action-log" => ActionLogStore.GetAll(),
                 _ => new ErrorResponse("not_found", $"Unknown endpoint: {path}")
             };
             var statusCode = payload is ErrorResponse ? 404 : 200;
@@ -179,13 +180,19 @@ public sealed class LocalBridgeServer : IAsyncDisposable
 
     private async Task HandleDeleteAsync(HttpListenerContext context, string path, CancellationToken cancellationToken)
     {
-        if (!string.Equals(path, "/agent-status", StringComparison.Ordinal))
+        if (string.Equals(path, "/agent-status", StringComparison.Ordinal))
         {
-            await WriteAsync(context.Response, 404, new ErrorResponse("not_found", $"Unknown endpoint: {path}"), cancellationToken).ConfigureAwait(false);
+            await WriteAsync(context.Response, 200, AgentStatusStateStore.Clear(), cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        await WriteAsync(context.Response, 200, AgentStatusStateStore.Clear(), cancellationToken).ConfigureAwait(false);
+        if (string.Equals(path, "/action-log", StringComparison.Ordinal))
+        {
+            await WriteAsync(context.Response, 200, ActionLogStore.Clear(), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await WriteAsync(context.Response, 404, new ErrorResponse("not_found", $"Unknown endpoint: {path}"), cancellationToken).ConfigureAwait(false);
     }
 
     private async Task HandleAgentStatusPostAsync(HttpListenerContext context, CancellationToken cancellationToken)

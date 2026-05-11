@@ -3,6 +3,7 @@ using Sts2Mod.StateBridge.Contracts;
 using Sts2Mod.StateBridge.Core;
 using Sts2Mod.StateBridge.Extraction;
 using Sts2Mod.StateBridge.Logging;
+using Sts2Mod.StateBridge.Server;
 
 namespace Sts2Mod.StateBridge.Providers;
 
@@ -15,6 +16,7 @@ internal static class InGameRuntimeCoordinator
     private static Dictionary<string, IWindowExtractor>? _extractors;
     private static IBridgeLogger? _logger;
     private static ExportedWindow? _currentWindow;
+    private static ExportedWindow? _previousWindow;
     private static string? _lastTickError;
     private static int _tickCount;
     private static DateTimeOffset? _lastTickAt;
@@ -56,6 +58,7 @@ internal static class InGameRuntimeCoordinator
             _initialized = true;
             _lastTickError = null;
             _currentWindow = null;
+            _previousWindow = null;
             _tickCount = 0;
             _lastTickAt = null;
             logger.Info("Initialized in-game runtime coordinator");
@@ -77,6 +80,7 @@ internal static class InGameRuntimeCoordinator
             }
 
             _currentWindow = null;
+            _previousWindow = null;
             _lastTickError = null;
             _tickCount = 0;
             _lastTickAt = null;
@@ -119,10 +123,23 @@ internal static class InGameRuntimeCoordinator
         {
             var context = reader.CaptureWindow();
             var window = extractors[context.Phase].Export(context, sessionState);
+            ExportedWindow? previous;
             lock (Gate)
             {
+                previous = _currentWindow;
+                _previousWindow = previous;
                 _currentWindow = window;
                 _lastTickError = null;
+            }
+
+            if (previous is not null
+                && window.Snapshot.StateVersion != previous.Snapshot.StateVersion)
+            {
+                var inferred = DetectAction(previous, window);
+                if (inferred is not null)
+                {
+                    ActionLogStore.Add(inferred);
+                }
             }
         }
         catch (Exception ex)
@@ -153,6 +170,366 @@ internal static class InGameRuntimeCoordinator
             error = _lastTickError ?? "In-game runtime window is not ready yet.";
             return false;
         }
+    }
+
+    private static InferredAction? DetectAction(ExportedWindow old, ExportedWindow @new)
+    {
+        var oldSnap = old.Snapshot;
+        var newSnap = @new.Snapshot;
+        var sv = newSnap.StateVersion;
+        var ts = DateTimeOffset.UtcNow.ToString("O");
+
+        // Phase change — not a player action
+        if (!string.Equals(oldSnap.Phase, newSnap.Phase, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var phase = newSnap.Phase;
+        return phase switch
+        {
+            DecisionPhase.Combat => DetectCombatAction(oldSnap, newSnap, old.Actions, sv, ts),
+            DecisionPhase.Map => DetectMapAction(oldSnap, newSnap, old.Actions, sv, ts),
+            DecisionPhase.Event => DetectEventAction(oldSnap, newSnap, old.Actions, sv, ts),
+            DecisionPhase.Reward => DetectRewardAction(oldSnap, newSnap, old.Actions, sv, ts),
+            DecisionPhase.Shop => DetectShopAction(oldSnap, newSnap, old.Actions, sv, ts),
+            _ => null,
+        };
+    }
+
+    private static InferredAction? DetectCombatAction(
+        DecisionSnapshot oldSnap, DecisionSnapshot newSnap,
+        IReadOnlyList<LegalAction> oldActions, int sv, string ts)
+    {
+        var oldPlayer = oldSnap.Player;
+        var newPlayer = newSnap.Player;
+        if (oldPlayer is null || newPlayer is null)
+        {
+            return null;
+        }
+
+        var oldHandIds = oldPlayer.Hand.Select(c => c.CardId).ToList();
+        var newHandIds = newPlayer.Hand.Select(c => c.CardId).ToList();
+        var handChanged = oldHandIds.Count != newHandIds.Count
+            || !oldHandIds.SequenceEqual(newHandIds);
+        var energyChanged = oldPlayer.Energy != newPlayer.Energy;
+
+        // Card played: hand shrank or card removed, and energy changed
+        if (handChanged && energyChanged && newHandIds.Count < oldHandIds.Count)
+        {
+            var removedIds = oldHandIds.Except(newHandIds).ToList();
+            foreach (var removed in removedIds)
+            {
+                var matched = oldActions.FirstOrDefault(a =>
+                    string.Equals(a.Type, "play_card", StringComparison.OrdinalIgnoreCase)
+                    && a.Params.TryGetValue("card_id", out var cid)
+                    && string.Equals(cid?.ToString(), removed, StringComparison.Ordinal));
+                if (matched is not null)
+                {
+                    return new InferredAction(
+                        Type: "play_card",
+                        Label: matched.Label,
+                        Params: matched.Params,
+                        StateVersion: sv,
+                        Phase: DecisionPhase.Combat,
+                        Timestamp: ts);
+                }
+            }
+
+            // Fallback: card removed but no action match
+            var card = oldPlayer.Hand.FirstOrDefault(c => c.CardId == removedIds.FirstOrDefault());
+            if (card is not null)
+            {
+                return new InferredAction(
+                    Type: "play_card",
+                    Label: $"Play {card.Name}",
+                    Params: new Dictionary<string, object?> { ["card_id"] = card.CardId, ["card_name"] = card.Name },
+                    StateVersion: sv,
+                    Phase: DecisionPhase.Combat,
+                    Timestamp: ts);
+            }
+        }
+
+        // Potion used: potions list shrank
+        if (newPlayer.Potions.Count < oldPlayer.Potions.Count)
+        {
+            var matched = oldActions.FirstOrDefault(a =>
+                string.Equals(a.Type, "use_potion", StringComparison.OrdinalIgnoreCase));
+            return new InferredAction(
+                Type: "use_potion",
+                Label: matched?.Label ?? "Use Potion",
+                Params: matched?.Params,
+                StateVersion: sv,
+                Phase: DecisionPhase.Combat,
+                Timestamp: ts);
+        }
+
+        // Card played via star consumption (stars in metadata changed, energy unchanged)
+        var oldStars = GetMetaInt(oldSnap.Metadata, "stars");
+        var newStars = GetMetaInt(newSnap.Metadata, "stars");
+        if (!energyChanged && oldStars.HasValue && newStars.HasValue && newStars.Value < oldStars.Value && handChanged)
+        {
+            var removedIds = oldHandIds.Except(newHandIds).ToList();
+            foreach (var removed in removedIds)
+            {
+                var matched = oldActions.FirstOrDefault(a =>
+                    string.Equals(a.Type, "play_card", StringComparison.OrdinalIgnoreCase)
+                    && a.Params.TryGetValue("card_id", out var cid)
+                    && string.Equals(cid?.ToString(), removed, StringComparison.Ordinal));
+                if (matched is not null)
+                {
+                    return new InferredAction(
+                        Type: "play_card",
+                        Label: matched.Label,
+                        Params: matched.Params,
+                        StateVersion: sv,
+                        Phase: DecisionPhase.Combat,
+                        Timestamp: ts);
+                }
+            }
+        }
+
+        // End turn: energy restored + hand redrawn
+        if (oldPlayer.Energy == 0 && newPlayer.Energy > 0 && handChanged)
+        {
+            return new InferredAction(
+                Type: "end_turn",
+                Label: "End Turn",
+                StateVersion: sv,
+                Phase: DecisionPhase.Combat,
+                Timestamp: ts);
+        }
+
+        // Enemy turn: only when window_kind is "enemy_turn"
+        var newWindowKind = GetWindowKind(newSnap);
+        if (string.Equals(newWindowKind, "enemy_turn", StringComparison.OrdinalIgnoreCase))
+        {
+            return new InferredAction(
+                Type: "enemy_turn",
+                Label: "Enemy Turn",
+                StateVersion: sv,
+                Phase: DecisionPhase.Combat,
+                Timestamp: ts);
+        }
+
+        // Player turn with effect trigger (enemy/player HP changed but no card played)
+        if (string.Equals(newWindowKind, "player_turn", StringComparison.OrdinalIgnoreCase)
+            && !handChanged && !energyChanged)
+        {
+            var playerHpChanged = oldPlayer.Hp != newPlayer.Hp || oldPlayer.Block != newPlayer.Block;
+            var enemyStateChanged = false;
+            if (oldSnap.Enemies.Count == newSnap.Enemies.Count)
+            {
+                for (int i = 0; i < oldSnap.Enemies.Count; i++)
+                {
+                    if (oldSnap.Enemies[i].Hp != newSnap.Enemies[i].Hp
+                        || oldSnap.Enemies[i].Block != newSnap.Enemies[i].Block)
+                    {
+                        enemyStateChanged = true;
+                        break;
+                    }
+                }
+            }
+
+            if (playerHpChanged || enemyStateChanged)
+            {
+                return new InferredAction(
+                    Type: "effect_trigger",
+                    Label: "Effect Trigger",
+                    StateVersion: sv,
+                    Phase: DecisionPhase.Combat,
+                    Timestamp: ts);
+            }
+        }
+
+        return null;
+    }
+
+    private static InferredAction? DetectMapAction(
+        DecisionSnapshot oldSnap, DecisionSnapshot newSnap,
+        IReadOnlyList<LegalAction> oldActions, int sv, string ts)
+    {
+        var oldCoord = oldSnap.RunState?.Map?.CurrentCoord;
+        var newCoord = newSnap.RunState?.Map?.CurrentCoord;
+        if (string.IsNullOrEmpty(oldCoord) || string.IsNullOrEmpty(newCoord)
+            || string.Equals(oldCoord, newCoord, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        // Match against legal actions
+        var matched = oldActions.FirstOrDefault(a =>
+            string.Equals(a.Type, "choose_map_node", StringComparison.OrdinalIgnoreCase)
+            && a.Params.TryGetValue("node", out var node)
+            && node?.ToString()?.Contains(newCoord) == true);
+        if (matched is not null)
+        {
+            return new InferredAction(
+                Type: "choose_map_node",
+                Label: matched.Label,
+                Params: matched.Params,
+                StateVersion: sv,
+                Phase: DecisionPhase.Map,
+                Timestamp: ts);
+        }
+
+        return new InferredAction(
+            Type: "choose_map_node",
+            Label: $"Choose {newCoord}",
+            Params: new Dictionary<string, object?> { ["node"] = newCoord },
+            StateVersion: sv,
+            Phase: DecisionPhase.Map,
+            Timestamp: ts);
+    }
+
+    private static InferredAction? DetectEventAction(
+        DecisionSnapshot oldSnap, DecisionSnapshot newSnap,
+        IReadOnlyList<LegalAction> oldActions, int sv, string ts)
+    {
+        var oldMeta = oldSnap.Metadata;
+        var newMeta = newSnap.Metadata;
+        var oldTitle = GetMetaStr(oldMeta, "event_title");
+        var newTitle = GetMetaStr(newMeta, "event_title");
+        var oldKind = GetMetaStr(oldMeta, "window_kind");
+        var newKind = GetMetaStr(newMeta, "window_kind");
+
+        // Event option chosen (title changed)
+        if (!string.Equals(oldTitle, newTitle, StringComparison.Ordinal))
+        {
+            var matched = oldActions.FirstOrDefault(a =>
+                string.Equals(a.Type, "choose_event_option", StringComparison.OrdinalIgnoreCase));
+            return new InferredAction(
+                Type: "choose_event_option",
+                Label: matched?.Label ?? newTitle ?? "Event Choice",
+                Params: matched?.Params,
+                StateVersion: sv,
+                Phase: DecisionPhase.Event,
+                Timestamp: ts);
+        }
+
+        // Continue event (window_kind changed)
+        if (!string.Equals(oldKind, newKind, StringComparison.Ordinal))
+        {
+            var matched = oldActions.FirstOrDefault(a =>
+                string.Equals(a.Type, "continue_event", StringComparison.OrdinalIgnoreCase));
+            return new InferredAction(
+                Type: "continue_event",
+                Label: matched?.Label ?? "Continue",
+                Params: matched?.Params,
+                StateVersion: sv,
+                Phase: DecisionPhase.Event,
+                Timestamp: ts);
+        }
+
+        return null;
+    }
+
+    private static InferredAction? DetectRewardAction(
+        DecisionSnapshot oldSnap, DecisionSnapshot newSnap,
+        IReadOnlyList<LegalAction> oldActions, int sv, string ts)
+    {
+        var oldRewards = oldSnap.Rewards;
+        var newRewards = newSnap.Rewards;
+
+        if (oldRewards.Count == newRewards.Count)
+        {
+            return null;
+        }
+
+        // Reward taken
+        var removed = oldRewards.Except(newRewards).FirstOrDefault();
+        if (removed is not null)
+        {
+            var matched = oldActions.FirstOrDefault(a =>
+                string.Equals(a.Type, "choose_reward", StringComparison.OrdinalIgnoreCase)
+                && a.Params.TryGetValue("reward", out var r)
+                && string.Equals(r?.ToString(), removed, StringComparison.Ordinal));
+            return new InferredAction(
+                Type: "choose_reward",
+                Label: matched?.Label ?? $"Choose {removed}",
+                Params: matched?.Params ?? new Dictionary<string, object?> { ["reward"] = removed },
+                StateVersion: sv,
+                Phase: DecisionPhase.Reward,
+                Timestamp: ts);
+        }
+
+        // All rewards consumed or advanced
+        if (newRewards.Count == 0)
+        {
+            var advance = oldActions.FirstOrDefault(a =>
+                string.Equals(a.Type, "advance_reward", StringComparison.OrdinalIgnoreCase));
+            var skip = oldActions.FirstOrDefault(a =>
+                string.Equals(a.Type, "skip_reward", StringComparison.OrdinalIgnoreCase));
+            var matched = advance ?? skip;
+            return new InferredAction(
+                Type: matched?.Type ?? "advance_reward",
+                Label: matched?.Label ?? "Advance",
+                Params: matched?.Params,
+                StateVersion: sv,
+                Phase: DecisionPhase.Reward,
+                Timestamp: ts);
+        }
+
+        return null;
+    }
+
+    private static InferredAction? DetectShopAction(
+        DecisionSnapshot oldSnap, DecisionSnapshot newSnap,
+        IReadOnlyList<LegalAction> oldActions, int sv, string ts)
+    {
+        var goldChanged = (oldSnap.Player?.Gold ?? 0) != (newSnap.Player?.Gold ?? 0);
+        if (!goldChanged)
+        {
+            return null;
+        }
+
+        // Try to match against specific shop actions
+        foreach (var action in oldActions)
+        {
+            if (action.Type.StartsWith("buy_shop_", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(action.Type, "purge_shop_card", StringComparison.OrdinalIgnoreCase))
+            {
+                // Check if the item is no longer available (purchased)
+                // This is a best-effort match
+            }
+        }
+
+        return new InferredAction(
+            Type: "shop_purchase",
+            Label: "Shop Purchase",
+            StateVersion: sv,
+            Phase: DecisionPhase.Shop,
+            Timestamp: ts);
+    }
+
+    private static string? GetWindowKind(DecisionSnapshot snap)
+    {
+        return snap.Metadata.TryGetValue("window_kind", out var val) ? val as string : null;
+    }
+
+    private static string? GetMetaStr(IReadOnlyDictionary<string, object?> meta, string key)
+    {
+        return meta.TryGetValue(key, out var val) ? val?.ToString() : null;
+    }
+
+    private static int? GetMetaInt(IReadOnlyDictionary<string, object?> meta, string key)
+    {
+        if (!meta.TryGetValue(key, out var val) || val is null)
+        {
+            return null;
+        }
+
+        if (val is int i)
+        {
+            return i;
+        }
+
+        if (int.TryParse(val.ToString(), out var parsed))
+        {
+            return parsed;
+        }
+
+        return null;
     }
 
     public static ActionResponse ApplyAction(ActionRequest request, bool readOnly)

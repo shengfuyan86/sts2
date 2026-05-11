@@ -1,0 +1,107 @@
+{
+  "run_id": "20260510_161846_sess-f5f",
+  "session_id": "sess-f5f95644",
+  "started_at": "2026-05-10T08:18:46.934277+00:00",
+  "ended_at": "2026-05-10T09:09:14.514982+00:00",
+  "total_steps": 371,
+  "sl_events": [
+    {
+      "type": "phase_return",
+      "interrupted_phase": "reward",
+      "old_state_version": 467,
+      "new_state_version": 469,
+      "session_id": "sess-f5f95644",
+      "reason": "Returned to 'reward' phase after menu interruption, likely Save & Load",
+      "step_index": 155,
+      "timestamp": "2026-05-10T08:33:07.132035+00:00"
+    },
+    {
+      "type": "phase_return",
+      "interrupted_phase": "combat",
+      "old_state_version": 544,
+      "new_state_version": 545,
+      "session_id": "sess-f5f95644",
+      "reason": "Returned to 'combat' phase after menu interruption, likely Save & Load",
+      "step_index": 205,
+      "timestamp": "2026-05-10T08:40:34.388127+00:00"
+    },
+    {
+      "type": "phase_return",
+      "interrupted_phase": "reward",
+      "old_state_version": 656,
+      "new_state_version": 658,
+      "session_id": "sess-f5f95644",
+      "reason": "Returned to 'reward' phase after menu interruption, likely Save & Load",
+      "step_index": 267,
+      "timestamp": "2026-05-10T08:52:35.635858+00:00"
+    },
+    {
+      "type": "phase_return",
+      "interrupted_phase": "reward",
+      "old_state_version": 664,
+      "new_state_version": 666,
+      "session_id": "sess-f5f95644",
+      "reason": "Returned to 'reward' phase after menu interruption, likely Save & Load",
+      "step_index": 273,
+      "timestamp": "2026-05-10T08:52:55.810024+00:00"
+    },
+    {
+      "type": "phase_return",
+      "interrupted_phase": "reward",
+      "old_state_version": 731,
+      "new_state_version": 733,
+      "session_id": "sess-f5f95644",
+      "reason": "Returned to 'reward' phase after menu interruption, likely Save & Load",
+      "step_index": 304,
+      "timestamp": "2026-05-10T08:56:12.767149+00:00"
+    },
+    {
+      "type": "phase_return",
+      "interrupted_phase": "reward",
+      "old_state_version": 747,
+      "new_state_version": 749,
+      "session_id": "sess-f5f95644",
+      "reason": "Returned to 'reward' phase after menu interruption, likely Save & Load",
+      "step_index": 317,
+      "timestamp": "2026-05-10T08:56:35.118431+00:00"
+    },
+    {
+      "type": "phase_return",
+      "interrupted_phase": "reward",
+      "old_state_version": 773,
+      "new_state_version": 775,
+      "session_id": "sess-f5f95644",
+      "reason": "Returned to 'reward' phase after menu interruption, likely Save & Load",
+      "step_index": 341,
+      "timestamp": "2026-05-10T09:06:52.755702+00:00"
+    },
+    {
+      "type": "phase_return",
+      "interrupted_phase": "reward",
+      "old_state_version": 790,
+      "new_state_version": 792,
+      "session_id": "sess-f5f95644",
+      "reason": "Returned to 'reward' phase after menu interruption, likely Save & Load",
+      "step_index": 357,
+      "timestamp": "2026-05-10T09:08:23.346520+00:00"
+    },
+    {
+      "type": "phase_return",
+      "interrupted_phase": "reward",
+      "old_state_version": 800,
+      "new_state_version": 802,
+      "session_id": "sess-f5f95644",
+      "reason": "Returned to 'reward' phase after menu interruption, likely Save & Load",
+      "step_index": 366,
+      "timestamp": "2026-05-10T09:08:55.072361+00:00"
+    }
+  ],
+  "phases_visited": [
+    "combat",
+    "event",
+    "map",
+    "menu",
+    "reward",
+    "terminal"
+  ]
+}

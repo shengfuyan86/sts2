@@ -1,0 +1,13 @@
+{
+  "run_id": "20260511_092011_sess-79c",
+  "session_id": "sess-79cd9095",
+  "started_at": "2026-05-11T01:20:11.698250+00:00",
+  "ended_at": "2026-05-11T01:26:24.615503+00:00",
+  "total_steps": 7,
+  "sl_events": [],
+  "phases_visited": [
+    "combat",
+    "menu",
+    "reward"
+  ]
+}
